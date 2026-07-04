@@ -28,11 +28,18 @@ def total = HighestAll(cnt);
 # ---------- mobile mode: volume-based detection ----------
 # (volume peak already occurs on the post-earnings reaction day,
 #  so no shift is applied here)
-def inQ1 = bn > lastBar - 63 and bn <= lastBar;
+# window sizes adapt to the chart aggregation: one quarter is
+# ~63 daily bars or ~13 weekly bars
+def wkly = GetAggregationPeriod() >= AggregationPeriod.WEEK;
+def qBars = if wkly then 13 else 63;
+def q2Win = if wkly then 15 else 68;
+def q2Gap = if wkly then 1 else 5;
+
+def inQ1 = bn > lastBar - qBars and bn <= lastBar;
 def maxV1 = HighestAll(if inQ1 then volume else 0);
 def a1bn = HighestAll(if inQ1 and volume == maxV1 then bn else 0);
 
-def inQ2 = bn > a1bn - 68 and bn < a1bn - 5;
+def inQ2 = bn > a1bn - q2Win and bn < a1bn - q2Gap;
 def maxV2 = HighestAll(if inQ2 then volume else 0);
 def a2bn = HighestAll(if inQ2 and volume == maxV2 then bn else 0);
 

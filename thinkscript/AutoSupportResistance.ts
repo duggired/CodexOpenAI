@@ -52,9 +52,12 @@ S1.SetDefaultColor(Color.GREEN);       S1.SetLineWeight(2);
 S2.SetDefaultColor(Color.DARK_GREEN);  S2.SetStyle(Curve.SHORT_DASH);
 S3.SetDefaultColor(Color.DARK_GREEN);  S3.SetStyle(Curve.SHORT_DASH);
 
-# --- 52-week high / low ---
-def yhV = HighestAll(if bn == lastBar then Highest(high, 252) else 0);
-def ylV = HighestAll(if bn == lastBar then Lowest(low, 252) else 0);
+# --- 52-week high / low (aggregation-aware: 252 daily / 52 weekly bars) ---
+def wkly = GetAggregationPeriod() >= AggregationPeriod.WEEK;
+def yh252 = if wkly then Highest(high, 52) else Highest(high, 252);
+def yl252 = if wkly then Lowest(low, 52) else Lowest(low, 252);
+def yhV = HighestAll(if bn == lastBar then yh252 else 0);
+def ylV = HighestAll(if bn == lastBar then yl252 else 0);
 plot YrHigh = if yhV > 0 then yhV else Double.NaN;
 plot YrLow  = if ylV > 0 then ylV else Double.NaN;
 YrHigh.SetDefaultColor(Color.GRAY);  YrHigh.SetStyle(Curve.LONG_DASH);
