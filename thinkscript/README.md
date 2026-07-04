@@ -12,6 +12,7 @@ plus trend labels. Developed for use on thinkorswim desktop and mobile.
 | `TrendLabels.ts` | Corner labels: short-term trend (8/21 EMA) and long-term trend (200 SMA). | Daily charts. |
 | `EarnAVWAP_TRIX_Alert.ts` | Chart study: green arrow + alert when a candle closes above the Earnings AVWAP with TRIX above zero. | Desktop chart alerts (platform must be open). |
 | `EarnAVWAP_TRIX_StudyAlert.ts` | Same signal as a server-side Study Alert condition — pushes to mobile/email even when desktop is closed. Hardcoded anchor date, update quarterly. | MarketWatch → Alerts → Study Alert, aggregation Day. |
+| `AutoSupportResistance.ts` | Auto-drawn support/resistance: 3 most recent pivot highs (red) and pivot lows (green) plus 52-week high/low (gray). `pivotStrength` input tunes level significance. | Desktop and mobile, daily charts with 1yr+ history. |
 
 ## How to install
 
