@@ -10,6 +10,8 @@ plus trend labels. Developed for use on thinkorswim desktop and mobile.
 | `EarningsAVWAP_Auto.ts` | Main study. Plots AVWAP from the last TWO earnings dates, self-updating every quarter — no maintenance. Cyan solid = most recent earnings, orange dashed = prior quarter. | Desktop (exact earnings events) and mobile (volume-peak detection). Daily charts, 1yr+ history. |
 | `EarningsAVWAP_ManualDates.ts` | Backup study with typed-in anchor dates (yyyymmdd inputs). | Everywhere, including intraday charts. Update dates each quarter. |
 | `TrendLabels.ts` | Corner labels: short-term trend (8/21 EMA) and long-term trend (200 SMA). | Daily charts. |
+| `EarnAVWAP_TRIX_Alert.ts` | Chart study: green arrow + alert when a candle closes above the Earnings AVWAP with TRIX above zero. | Desktop chart alerts (platform must be open). |
+| `EarnAVWAP_TRIX_StudyAlert.ts` | Same signal as a server-side Study Alert condition — pushes to mobile/email even when desktop is closed. Hardcoded anchor date, update quarterly. | MarketWatch → Alerts → Study Alert, aggregation Day. |
 
 ## How to install
 
