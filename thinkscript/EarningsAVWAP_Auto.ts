@@ -11,6 +11,7 @@
 declare hide_on_intraday;
 
 input startNextDay = yes;  # yes = anchor the day after the earnings flag
+input showLabel = yes;     # set to no on mobile to hide the anchor-mode label
                            # set to no for stocks that report before the open
 
 def tp = (high + low + close) / 3;
@@ -63,6 +64,6 @@ plot PriorEarnVWAP = if on2 and v2 > 0 then pv2 / v2 else Double.NaN;
 PriorEarnVWAP.SetDefaultColor(Color.ORANGE);
 PriorEarnVWAP.SetStyle(Curve.MEDIUM_DASH);
 
-AddLabel(yes, if hasEventData then "Anchors: earnings events (next-day start)"
+AddLabel(showLabel, if hasEventData then "Anchors: earnings events (next-day start)"
               else "Anchors: quarterly volume peaks",
          if hasEventData then Color.GREEN else Color.YELLOW);
