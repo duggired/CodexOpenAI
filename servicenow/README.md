@@ -11,8 +11,30 @@ Before developers update artifacts to the aligned values, they need the list
 of **every object referencing those fields or the customized values/labels** —
 without verifying each artifact manually.
 
-`incident-state-impact-discovery.js` produces that list. It is a **read-only
-ServiceNow background script** (it never inserts/updates anything).
+Two discovery scripts produce that list — both **read-only ServiceNow
+background scripts** (they never insert/update anything):
+
+- **`incident-state-impact-discovery-strict.js` — the primary worklist.**
+  Only reports objects with evidence they are about the incident table:
+  table-scoped artifacts must sit on `incident` exactly; unscoped artifacts
+  (script includes, widgets, UX scripts, jobs...) must also contain incident
+  evidence in their code — `new GlideRecord('incident')` /
+  `GlideRecordSecure` / `GlideAggregate` on incident, `table: 'incident'`, a
+  quoted `'incident'` literal, or the incident-only fields `incident_state`
+  / `hold_reason`. Results are limited to the **Global** application scope
+  (`globalScopeOnly` / `applicationScopes` in CONFIG), task-level artifacts
+  are excluded by default (`includeTaskLevel: false`), and the report shows
+  how many state matches were excluded as noise.
+- **`incident-state-impact-discovery.js` — the completeness cross-check.**
+  Broad sweep: any state-field reference, `task`-level artifacts included,
+  all application scopes. Expect noise (state fields on other tables match
+  too); use it to catch what strict mode's filters can hide — e.g. a
+  task-level business rule checking `current.state` (it does run for
+  incidents), or a generic widget whose table name arrives via an instance
+  option so `'incident'` never appears in its code.
+
+Both share the same value map, HIGH/MEDIUM/REVIEW priorities, and CSV
+format, so the two worklists are directly comparable.
 
 ## What's pre-configured from the one-pager
 
