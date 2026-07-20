@@ -5,21 +5,33 @@
  *         or paste into a Fix Script. Read-only: it only queries, never updates.
  *
  * Purpose:
- *   The choice list for incident "state" / "incident_state" was reverted to
- *   out-of-the-box (OOTB). This script produces the list of server / client /
- *   UI (portal + workspace) objects that reference the state field or your
- *   customized choice values, so a developer can work from the report instead
- *   of verifying every artifact manually.
+ *   Per the "Incident State Field Alignment" one-pager, both incident state
+ *   fields (state + incident_state) are being aligned back to the OOTB
+ *   six-value standard (1 New, 2 In Progress, 3 On Hold, 6 Resolved,
+ *   7 Closed, 8 Canceled), with the custom "Awaiting" states becoming
+ *   On Hold reasons (hold_reason).
+ *
+ *   This script produces the list of server / client / UI (portal +
+ *   workspace) objects that reference those fields or the customized
+ *   values/labels, prioritized by how badly the alignment breaks them,
+ *   so developers can work from the report instead of verifying manually.
  *
  * How to use:
- *   1. Fill CONFIG.customChoiceValues with the custom values/labels you had
- *      before the revert (e.g. ['10', '12', 'Awaiting Vendor']). Leaving it
- *      empty still works: every artifact that references the state field is
- *      reported, just without the "custom value" match level.
+ *   1. CONFIG.customChoiceValues is pre-filled from the alignment one-pager.
+ *      Adjust if your value map differs.
  *   2. Run in a sub-prod instance first. Output goes to the script output /
  *      system log (gs.info).
  *   3. The report ends with a CSV block you can copy into a sheet and use as
  *      the developer worklist.
+ *
+ * Priority meanings in the report:
+ *   HIGH   - references a RETIRED value/label (4,5,9,10,11,12 or an old
+ *            label). Breaks outright after alignment; must be remediated.
+ *   MEDIUM - references a value that survives but changes meaning or label
+ *            (1,2,3) or one being restored (7,8). Logic may silently do the
+ *            wrong thing; needs review + likely update.
+ *   REVIEW - touches state/incident_state/hold_reason without a recognized
+ *            value nearby. Needs a functional check.
  */
 
 (function () {
@@ -29,17 +41,35 @@
     // CONFIG - adjust before running
     // ------------------------------------------------------------------
     var CONFIG = {
-        // Tables whose state choices were reverted.
+        // Tables whose state choices are being aligned.
         targetTables: ['incident'],
         // 'task' is included because task-level artifacts (BRs, UI policies,
         // notifications...) also fire for incident records.
         tableScope: ['incident', 'task'],
-        // State columns to look for.
-        stateFields: ['state', 'incident_state'],
-        // Your customized choice values AND/OR labels lost in the revert,
-        // as strings. Example: ['10', '12', 'awaiting_vendor', 'Awaiting Vendor']
-        customChoiceValues: [],
-        // How close (in characters) a custom value must be to the word
+        // State columns to look for. hold_reason is included because the
+        // custom "Awaiting" states move there - anything already touching it
+        // is part of the same migration.
+        stateFields: ['state', 'incident_state', 'hold_reason'],
+
+        // From the alignment one-pager (current vs OOTB vs future):
+        customChoiceValues: {
+            // Retired after alignment - references to these BREAK (HIGH).
+            retired: [
+                '4', '5', '9', '10', '11', '12',
+                'Awaiting Problem', 'Awaiting User Info', 'Awaiting Evidence',
+                'Awaiting Release', 'Assigned', 'Active',
+                'Open', 'Work in Progress', 'Closed Complete',
+                'Pending Approval', 'Cancelled'
+            ],
+            // Survive but change meaning/label, or are being restored -
+            // references need review/update (MEDIUM).
+            // 1: Open->New; 2: Active/WIP->In Progress; 3: means three
+            // different things today, becomes On Hold; 7 Closed and
+            // 8 Canceled are restored (absorb Closed Complete / Cancelled).
+            changed: ['1', '2', '3', '7', '8', 'On Hold']
+        },
+
+        // How close (in characters) a value/label must be to the word
         // "state" inside a script/condition to count as a value match.
         proximityChars: 80,
         // Also scan Flow Designer flow snapshots (accurate but heavy on
@@ -62,7 +92,9 @@
         { category: 'Server',    table: 'sysauto_script',          label: 'Scheduled Script Job',   fields: ['script', 'condition'] },
         { category: 'Server',    table: 'sysevent_script_action',  label: 'Script Action',          fields: ['script'] },
         { category: 'Server',    table: 'sys_ws_operation',        label: 'Scripted REST Operation', fields: ['operation_script'] },
+        { category: 'Server',    table: 'sys_rest_message_fn',     label: 'REST Message Method (outbound)', fields: ['content'] },
         { category: 'Server',    table: 'sysevent_email_action',   label: 'Notification',           fields: ['condition', 'advanced_condition', 'subject', 'message_html'], scopeField: 'collection' },
+        { category: 'Server',    table: 'sysevent_email_template', label: 'Email Template',         fields: ['subject', 'message_html'], scopeField: 'collection' },
         { category: 'Server',    table: 'contract_sla',            label: 'SLA Definition',         fields: ['start_condition', 'stop_condition', 'pause_condition', 'reset_condition'], scopeField: 'collection' },
         { category: 'Server',    table: 'sys_security_acl',        label: 'ACL',                    fields: ['condition', 'script'], extraQuery: 'nameSTARTSWITHincident' },
         { category: 'Server',    table: 'sys_transform_script',    label: 'Transform Map Script',   fields: ['script'], extraQuery: 'map.target_tableINincident,task' },
@@ -94,6 +126,7 @@
         { category: 'Client',    table: 'sys_ui_policy_action', label: 'UI Policy Action',      fieldColumn: 'field',   query: 'ui_policy.tableIN' },
         { category: 'Server',    table: 'sys_transform_entry',  label: 'Transform Field Map',   fieldColumn: 'target_field', query: 'map.target_tableIN' },
         { category: 'Server',    table: 'metric_definition',    label: 'Metric Definition',     fieldColumn: 'field',   query: 'tableIN' },
+        { category: 'Server',    table: 'sys_data_policy_rule', label: 'Data Policy Rule',      fieldColumn: 'field',   query: 'sys_data_policy.model_tableIN' },
         { category: 'Server',    table: 'sys_dictionary_override', label: 'Dictionary Override', fieldColumn: 'element', query: 'nameIN' }
     ];
 
@@ -101,27 +134,38 @@
     // Matching helpers
     // ------------------------------------------------------------------
     var FIELD_PATTERNS = [
-        /['"](incident_state|state)['"]/,                                        // 'state' as a quoted field name (g_form/GlideRecord APIs)
-        /\.(incident_state|state)\b/,                                            // current.state, gr.incident_state, data.state ...
-        /\b(incident_state|state)\s*(=|!=|>=|<=|>|<|IN\b|NOT ?IN\b|CHANGES)/i    // encoded queries and condition strings
+        /['"](incident_state|state|hold_reason)['"]/,                                        // quoted field name (g_form/GlideRecord APIs)
+        /\.(incident_state|state|hold_reason)\b/,                                            // current.state, gr.incident_state ...
+        /\b(incident_state|state|hold_reason)\s*(=|!=|>=|<=|>|<|IN\b|NOT ?IN\b|CHANGES)/i    // encoded queries and condition strings
     ];
+
+    var PRIORITY_RANK = { HIGH: 0, MEDIUM: 1, REVIEW: 2 };
 
     function escapeRegex(s) {
         return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
 
-    var valueRegexes = [];
-    for (var v = 0; v < CONFIG.customChoiceValues.length; v++) {
-        valueRegexes.push({
-            raw: String(CONFIG.customChoiceValues[v]),
-            re: new RegExp('(^|[^\\w])' + escapeRegex(CONFIG.customChoiceValues[v]) + '([^\\w]|$)')
-        });
+    function buildValueRegexes(tokens, priority) {
+        var out = [];
+        for (var i = 0; i < tokens.length; i++) {
+            out.push({
+                raw: String(tokens[i]),
+                priority: priority,
+                re: new RegExp('(^|[^\\w])' + escapeRegex(tokens[i]) + '([^\\w]|$)', /^[0-9]+$/.test(tokens[i]) ? '' : 'i')
+            });
+        }
+        return out;
     }
 
+    var valueRegexes = buildValueRegexes(CONFIG.customChoiceValues.retired, 'HIGH')
+        .concat(buildValueRegexes(CONFIG.customChoiceValues.changed, 'MEDIUM'));
+
     /**
-     * Returns null if the text does not reference the state field, otherwise
-     * { fieldRef: true, values: ['10','12'] } where values are the custom
-     * choice values found within proximityChars of an occurrence of "state".
+     * Returns null if the text does not reference the state/hold_reason
+     * fields, otherwise:
+     * { values: ['4','Awaiting Evidence'], priority: 'HIGH'|'MEDIUM'|'REVIEW' }
+     * where values are retired/changed tokens found within proximityChars of
+     * an occurrence of "state" or "hold_reason".
      */
     function analyze(text) {
         if (!text)
@@ -137,19 +181,26 @@
             return null;
 
         var found = {};
-        var idx = text.indexOf('state');
-        while (idx !== -1) {
-            var win = text.substring(Math.max(0, idx - CONFIG.proximityChars), idx + CONFIG.proximityChars);
-            for (var j = 0; j < valueRegexes.length; j++) {
-                if (valueRegexes[j].re.test(win))
-                    found[valueRegexes[j].raw] = true;
+        var priority = 'REVIEW';
+        var anchors = ['state', 'hold_reason'];
+        for (var a = 0; a < anchors.length; a++) {
+            var idx = text.indexOf(anchors[a]);
+            while (idx !== -1) {
+                var win = text.substring(Math.max(0, idx - CONFIG.proximityChars), idx + CONFIG.proximityChars);
+                for (var j = 0; j < valueRegexes.length; j++) {
+                    if (valueRegexes[j].re.test(win)) {
+                        found[valueRegexes[j].raw] = true;
+                        if (PRIORITY_RANK[valueRegexes[j].priority] < PRIORITY_RANK[priority])
+                            priority = valueRegexes[j].priority;
+                    }
+                }
+                idx = text.indexOf(anchors[a], idx + anchors[a].length);
             }
-            idx = text.indexOf('state', idx + 5);
         }
         var values = [];
         for (var k in found)
             values.push(k);
-        return { fieldRef: true, values: values };
+        return { values: values, priority: priority };
     }
 
     // ------------------------------------------------------------------
@@ -173,6 +224,8 @@
             for (var i = 0; i < matchInfo.values.length; i++)
                 if (row.values.indexOf(matchInfo.values[i]) === -1)
                     row.values.push(matchInfo.values[i]);
+            if (PRIORITY_RANK[matchInfo.priority] < PRIORITY_RANK[row.priority])
+                row.priority = matchInfo.priority;
             return;
         }
         var entry = {
@@ -183,6 +236,7 @@
             sysId: gr.getUniqueValue(),
             matchedFields: [matchedField],
             values: matchInfo.values.slice(),
+            priority: matchInfo.priority,
             updatedBy: gr.getValue('sys_updated_by') || '',
             updatedOn: gr.getValue('sys_updated_on') || '',
             link: '/' + table + '.do?sys_id=' + gr.getUniqueValue()
@@ -207,8 +261,10 @@
             q.push(def.extraQuery);
         var likes = [];
         for (var i = 0; i < def.fields.length; i++) {
-            if (gr.isValidField(def.fields[i]))
+            if (gr.isValidField(def.fields[i])) {
                 likes.push(def.fields[i] + 'LIKEstate');
+                likes.push(def.fields[i] + 'LIKEhold_reason');
+            }
         }
         if (!likes.length) {
             skippedTables.push(def.table + ' (no matching columns)');
@@ -245,7 +301,9 @@
         gr.setLimit(CONFIG.maxRowsPerTable);
         gr.query();
         while (gr.next())
-            addResult(def.category, def.label, def.table, gr, def.fieldColumn + '=' + gr.getValue(def.fieldColumn), { values: [] });
+            addResult(def.category, def.label, def.table, gr,
+                      def.fieldColumn + '=' + gr.getValue(def.fieldColumn),
+                      { values: [], priority: 'REVIEW' });
     }
 
     // Classic workflow activities keep their scripts/conditions in
@@ -256,7 +314,7 @@
             skippedTables.push('sys_variable_value');
             return;
         }
-        vv.addEncodedQuery('document=wf_activity^valueLIKEstate');
+        vv.addEncodedQuery('document=wf_activity^valueLIKEstate^ORvalueLIKEhold_reason');
         vv.setLimit(CONFIG.maxRowsPerTable);
         vv.query();
         while (vv.next()) {
@@ -270,8 +328,15 @@
             if (wfTable && CONFIG.tableScope.indexOf(wfTable) === -1)
                 continue;
             var key = 'wf_activity:' + act.getUniqueValue();
-            if (seen[key])
+            if (seen[key]) {
+                var row = seen[key];
+                for (var i = 0; i < m.values.length; i++)
+                    if (row.values.indexOf(m.values[i]) === -1)
+                        row.values.push(m.values[i]);
+                if (PRIORITY_RANK[m.priority] < PRIORITY_RANK[row.priority])
+                    row.priority = m.priority;
                 continue;
+            }
             var entry = {
                 category: 'Server',
                 artifact: 'Workflow Activity',
@@ -280,6 +345,7 @@
                 sysId: act.getUniqueValue(),
                 matchedFields: ['activity variable'],
                 values: m.values.slice(),
+                priority: m.priority,
                 updatedBy: act.getValue('sys_updated_by') || '',
                 updatedOn: act.getValue('sys_updated_on') || '',
                 link: '/wf_activity.do?sys_id=' + act.getUniqueValue()
@@ -313,12 +379,13 @@
     }
 
     // ------------------------------------------------------------------
-    // Baseline: what the choice lists look like right now (post-revert)
+    // Baseline: what the choice lists look like right now (pre-alignment)
     // ------------------------------------------------------------------
     function dumpCurrentChoices() {
         gs.info('==================================================================');
-        gs.info('CURRENT (post-revert) CHOICES for ' + CONFIG.targetTables.join(',') + '.' + CONFIG.stateFields.join('/'));
-        gs.info('Compare this against your customized list; anything missing must be re-added.');
+        gs.info('CURRENT choices for ' + CONFIG.targetTables.join(',') + '.' + CONFIG.stateFields.join('/'));
+        gs.info('Compare against the alignment one-pager target: 1 New, 2 In Progress,');
+        gs.info('3 On Hold, 6 Resolved, 7 Closed, 8 Canceled (identical in both fields).');
         gs.info('==================================================================');
         var c = new GlideRecord('sys_choice');
         c.addQuery('name', 'IN', CONFIG.targetTables.join(','));
@@ -348,28 +415,35 @@
     function printReport() {
         var order = ['Server', 'Client', 'Portal', 'Workspace', 'Reporting'];
         var byCat = {};
+        var byPriority = { HIGH: 0, MEDIUM: 0, REVIEW: 0 };
         for (var i = 0; i < results.length; i++) {
             var r = results[i];
             if (!byCat[r.category])
                 byCat[r.category] = [];
             byCat[r.category].push(r);
+            byPriority[r.priority]++;
         }
 
         gs.info('==================================================================');
         gs.info('INCIDENT STATE IMPACT REPORT - ' + results.length + ' impacted object(s)');
-        gs.info('Custom values searched: ' + (CONFIG.customChoiceValues.length ? CONFIG.customChoiceValues.join(', ') : '(none configured - field-reference matches only)'));
+        gs.info('HIGH (retired value refs): ' + byPriority.HIGH +
+                ' | MEDIUM (changed value refs): ' + byPriority.MEDIUM +
+                ' | REVIEW (field ref only): ' + byPriority.REVIEW);
         gs.info('==================================================================');
 
         for (var o = 0; o < order.length; o++) {
             var cat = order[o];
             var rows = byCat[cat] || [];
+            rows.sort(function (a, b) {
+                return PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority];
+            });
             gs.info('');
             gs.info('--- ' + cat.toUpperCase() + ' (' + rows.length + ') ---');
             for (var j = 0; j < rows.length; j++) {
                 var row = rows[j];
-                gs.info(pad(row.artifact, 26) + '| ' + pad(row.name, 45) +
+                gs.info(pad(row.priority, 7) + '| ' + pad(row.artifact, 26) + '| ' + pad(row.name, 45) +
                         '| match: ' + pad(row.matchedFields.join(','), 30) +
-                        '| custom values: ' + pad(row.values.length ? row.values.join(',') : '-', 12) +
+                        '| values: ' + pad(row.values.length ? row.values.join(',') : '-', 12) +
                         '| ' + row.link);
             }
         }
@@ -382,10 +456,13 @@
         // CSV block - copy into a spreadsheet as the developer worklist
         gs.info('');
         gs.info('=== CSV EXPORT (copy below this line) ===');
-        gs.info('category,artifact_type,table,name,sys_id,matched_fields,custom_values_found,updated_by,updated_on,link');
-        for (var k = 0; k < results.length; k++) {
-            var e = results[k];
-            gs.info([e.category, e.artifact, e.table, csv(e.name), e.sysId,
+        gs.info('priority,category,artifact_type,table,name,sys_id,matched_fields,values_found,updated_by,updated_on,link');
+        var sorted = results.slice().sort(function (a, b) {
+            return PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority];
+        });
+        for (var k = 0; k < sorted.length; k++) {
+            var e = sorted[k];
+            gs.info([e.priority, e.category, e.artifact, e.table, csv(e.name), e.sysId,
                      csv(e.matchedFields.join(';')), csv(e.values.join(';')),
                      e.updatedBy, e.updatedOn, e.link].join(','));
         }
