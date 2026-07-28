@@ -36,6 +36,39 @@ background scripts** (they never insert/update anything):
 Both share the same value map, HIGH/MEDIUM/REVIEW priorities, and CSV
 format, so the two worklists are directly comparable.
 
+### `incident-hold-reason-impact-discovery.js` — On Hold / hold reason only
+
+A third, narrowly focused discovery script for the **On Hold** transition
+alone. Under the alignment the custom "Awaiting" `incident_state` values
+collapse into a single state (3 On Hold) and are distinguished by the
+**On Hold Reason** (`hold_reason`) field. This script reports only objects
+referencing those old waiting values or the `hold_reason` field — it ignores
+plain New/In Progress/Resolved/Closed references — and prints each hit as a
+direct **old → new** instruction.
+
+Old → new map applied (from the handout's "What happens" column):
+
+| Old reference | New |
+|---|---|
+| `incident_state=3` "Awaiting Problem" | On Hold (3) + reason **Awaiting Problem** |
+| `incident_state=4` "Awaiting User Info" | On Hold (3) + reason **Awaiting Caller** |
+| `incident_state=5` "Awaiting Evidence" | On Hold (3) + reason **Awaiting Evidence** *(custom, `keepAwaitingEvidence`)* |
+| `incident_state=9` "Awaiting Release" | On Hold (3) + reason **Awaiting Change** |
+| `state=11` "On Hold" (legacy) | On Hold (3) + reason *(manual — none derivable)* |
+
+Report specifics:
+
+- **HIGH** = the object references an old value that must be remapped;
+  **REVIEW** = it touches `hold_reason`, or sets On Hold without setting a
+  reason (those need a reason added post-alignment — counted separately).
+- Each row shows `old → new` inline, and the CSV has a dedicated
+  `old_to_new` column plus an `onhold_no_reason` flag.
+- SLA definitions are covered first-class because On Hold reasons drive SLA
+  **pause** behavior — the highest-value thing to verify after remapping.
+- Same incident-evidence filter and Global-scope default as strict mode.
+- Flip `keepAwaitingEvidence: false` in CONFIG to treat Awaiting Evidence as
+  retired instead of a custom reason.
+
 ## What's pre-configured from the one-pager
 
 The `CONFIG.customChoiceValues` block already encodes the alignment map:
